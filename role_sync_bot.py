@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 import aiohttp
 import asyncio
 import re
@@ -39,6 +40,16 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+def has_economy_manager():
+    async def predicate(interaction: discord.Interaction):
+        role = interaction.guild.get_role(ECONOMY_MANAGER_ROLE_ID)
+        if role and role in interaction.user.roles:
+            return True
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+        return False
+    return app_commands.check(predicate)
 
 
 @bot.event
@@ -120,9 +131,13 @@ async def sync_gamblers():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+    await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
+    print("Slash commands synced!")
     await send_log_embed(title="🚀 Bot Online", description="Bot is online and watching balances!", color=0x9b59b6)
     sync_gamblers.start()
 
+
+# ===== PREFIX COMMANDS =====
 
 @bot.command(name="check")
 async def check_balance(ctx):
@@ -167,6 +182,57 @@ async def purge_gods(ctx):
                 await send_log_embed(title="🧹 Gamble God Purged", description=f"**{member.name}** lost Gamble God.\nBalance: ${balance:,}", color=0xff0000)
             await asyncio.sleep(0.5)
     await ctx.send(f"✅ Purge complete! Removed Gamble God from {removed} users.")
+
+
+# ===== SLASH COMMANDS =====
+
+@bot.tree.command(name="check", description="Check your balance and Gamble God status")
+async def slash_check(interaction: discord.Interaction):
+    async with aiohttp.ClientSession() as session:
+        balance = await get_balance(session, interaction.user.id)
+        await update_role(session, interaction.user)
+    gambler_role = interaction.guild.get_role(GAMBLER_ROLE_ID)
+    if gambler_role and gambler_role not in interaction.user.roles:
+        await interaction.user.add_roles(gambler_role)
+        await send_log_embed(title="🎰 Gambler Role Assigned", description=f"**{interaction.user.name}** got The Gambler role via `/check`", color=0xf1c40f)
+    if balance >= CASH_THRESHOLD:
+        await interaction.response.send_message(f"Your total balance is ${balance:,}. You are a Gamble God!")
+    else:
+        await interaction.response.send_message(f"Your total balance is ${balance:,}. You need ${CASH_THRESHOLD - balance:,} more for Gamble God.")
+
+
+@bot.tree.command(name="forcecheck", description="Check another user's balance (Economy Manager only)")
+@app_commands.describe(member="The user to check")
+@has_economy_manager()
+async def slash_forcecheck(interaction: discord.Interaction, member: discord.Member):
+    async with aiohttp.ClientSession() as session:
+        balance = await update_role(session, member)
+    await interaction.response.send_message(f"**{member.name}** total balance: ${balance:,} — roles updated.")
+
+
+@bot.tree.command(name="purgegods", description="Remove Gamble God from everyone under threshold (Economy Manager only)")
+@has_economy_manager()
+async def slash_purgegods(interaction: discord.Interaction):
+    guild = interaction.guild
+    god_role = guild.get_role(ROLE_ID)
+    if not god_role:
+        await interaction.response.send_message("❌ Gamble God role not found.", ephemeral=True)
+        return
+    
+    await interaction.response.send_message("🔍 Checking all Gamble Gods...")
+    
+    gods = [m for m in guild.members if god_role in m.roles and not m.bot]
+    removed = 0
+    async with aiohttp.ClientSession() as session:
+        for member in gods:
+            balance = await get_balance(session, member.id)
+            if balance < CASH_THRESHOLD:
+                await member.remove_roles(god_role)
+                removed += 1
+                await send_log_embed(title="🧹 Gamble God Purged", description=f"**{member.name}** lost Gamble God.\nBalance: ${balance:,}", color=0xff0000)
+            await asyncio.sleep(0.5)
+    
+    await interaction.edit_original_response(content=f"✅ Purge complete! Removed Gamble God from {removed} users.")
 
 
 bot.run(DISCORD_TOKEN)
