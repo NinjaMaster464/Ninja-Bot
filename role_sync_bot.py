@@ -109,8 +109,8 @@ async def sync_gamblers():
         for i, member in enumerate(gamblers):
             try:
                 await update_role(session, member)
-                await asyncio.sleep(0.5)
-                if (i + 1) % 50 == 0:
+                await asyncio.sleep(2)
+                if (i + 1) % 25 == 0:
                     print(f"Synced {i+1}/{len(gamblers)}...")
             except Exception as e:
                 print(f"Failed {member.name}: {e}")
@@ -120,7 +120,9 @@ async def sync_gamblers():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+    await asyncio.sleep(10)
     await send_log_embed(title="🚀 Bot Online", description="Bot is online and watching balances!", color=0x9b59b6)
+    await asyncio.sleep(5)
     sync_gamblers.start()
 
 
@@ -147,6 +149,14 @@ async def force_check(ctx, member: discord.Member):
     await ctx.send(f"**{member.name}** total balance: ${balance:,} — roles updated.")
 
 
+@bot.command(name="syncall")
+@commands.has_role(ECONOMY_MANAGER_ROLE_ID)
+async def sync_all(ctx):
+    await ctx.send("⚡ Restarting sync cycle...")
+    sync_gamblers.restart()  # Restarts the loop from scratch
+    await ctx.send("✅ Sync cycle restarted! Running full sync now...")
+
+
 @bot.command(name="purgegods")
 @commands.has_role(ECONOMY_MANAGER_ROLE_ID)
 async def purge_gods(ctx):
@@ -165,7 +175,7 @@ async def purge_gods(ctx):
                 await member.remove_roles(god_role)
                 removed += 1
                 await send_log_embed(title="🧹 Gamble God Purged", description=f"**{member.name}** lost Gamble God.\nBalance: ${balance:,}", color=0xff0000)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(2)
     await ctx.send(f"✅ Purge complete! Removed Gamble God from {removed} users.")
 
 
