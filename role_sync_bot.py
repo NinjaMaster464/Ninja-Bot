@@ -157,48 +157,50 @@ async def on_message(message):
     if message.channel.name == TRANSACTION_LOG_CHANNEL and message.embeds:
         embed = message.embeds[0]
         
-        # Debug to gamble-god-logs
-        await send_log_message(f"[DEBUG] Saw embed in transactions-logs from {message.author.name}")
-        await send_log_message(f"[DEBUG] Author field: {embed.author.name if embed.author else 'None'}")
-        await send_log_message(f"[DEBUG] Has description: {embed.description is not None}")
-        
         if not embed.author or "Balance updated" not in str(embed.author.name):
-            await send_log_message(f"[DEBUG] Author not 'Balance updated', skipping")
             await bot.process_commands(message)
             return
         
         if not embed.description:
-            await send_log_message(f"[DEBUG] No description, skipping")
             await bot.process_commands(message)
             return
         
         description = embed.description
-        await send_log_message(f"[DEBUG] Description: {description[:200]}")
         
         if "add-money" not in description.lower():
-            await send_log_message(f"[DEBUG] Not add-money, skipping")
             await bot.process_commands(message)
             return
         
-        await send_log_message(f"[DEBUG] Add-money detected! Parsing...")
-        
-        # Parse the embed description
-        receiver_match = re.search(r'User:\s*<@!?(\d+)>', description)
-        staff_match = re.search(r'Actioned by:\s*<@!?(\d+)>', description)
+        # Parse by username text (embed renders mentions as @username)
+        receiver_name_match = re.search(r'User:\s*@([^\n]+)', description)
+        staff_name_match = re.search(r'Actioned by:\s*@([^\n]+)', description)
         cash_match = re.search(r'Cash:\s*([+-]?[\d,]+)', description)
         bank_match = re.search(r'Bank:\s*([+-]?[\d,]+)', description)
         
-        await send_log_message(f"[DEBUG] Receiver match: {receiver_match.group(1) if receiver_match else 'None'}")
-        await send_log_message(f"[DEBUG] Staff match: {staff_match.group(1) if staff_match else 'None'}")
-        
-        if not receiver_match or not staff_match:
-            await send_log_message(f"[DEBUG] Missing receiver or staff, skipping")
+        if not receiver_name_match or not staff_name_match:
+            await send_log_message(f"[DEBUG] Could not parse names from description")
             await bot.process_commands(message)
             return
         
-        receiver_id = int(receiver_match.group(1))
-        staff_id = int(staff_match.group(1))
+        receiver_name = receiver_name_match.group(1).strip()
+        staff_name = staff_name_match.group(1).strip()
         
+        # Look up members by name
+        receiver = discord.utils.get(message.guild.members, name=receiver_name)
+        staff = discord.utils.get(message.guild.members, name=staff_name)
+        
+        if not receiver:
+            # Try display name
+            receiver = discord.utils.get(message.guild.members, display_name=receiver_name)
+        if not staff:
+            staff = discord.utils.get(message.guild.members, display_name=staff_name)
+        
+        receiver_display = receiver.name if receiver else receiver_name
+        staff_display = staff.name if staff else staff_name
+        receiver_id = receiver.id if receiver else 0
+        staff_id = staff.id if staff else 0
+        
+        # Calculate total amount
         amount = 0
         if cash_match:
             cash_val = int(cash_match.group(1).replace(',', '').replace('+', ''))
@@ -207,23 +209,14 @@ async def on_message(message):
             bank_val = int(bank_match.group(1).replace(',', '').replace('+', ''))
             amount += abs(bank_val)
         
-        await send_log_message(f"[DEBUG] Amount: ${amount:,}")
-        
         if amount <= 0:
-            await send_log_message(f"[DEBUG] Amount is 0, skipping")
             await bot.process_commands(message)
             return
-        
-        receiver = message.guild.get_member(receiver_id)
-        staff = message.guild.get_member(staff_id)
-        
-        receiver_name = receiver.name if receiver else f"Unknown ({receiver_id})"
-        staff_name = staff.name if staff else f"Unknown ({staff_id})"
         
         # Create embed for economy-cmd-logs
         log_embed = discord.Embed(
             title="💰 Add Money",
-            description=f"**Staff:** {staff_name}\n**Receiver:** {receiver_name}\n**Amount:** ${amount:,}",
+            description=f"**Staff:** {staff_display}\n**Receiver:** {receiver_display}\n**Amount:** ${amount:,}",
             color=0x00ff00
         )
         log_embed.set_footer(text=f"Receiver ID: {receiver_id} | Staff ID: {staff_id}")
