@@ -155,21 +155,29 @@ async def on_message(message):
 
     # Watch for UnbelievaBoat transactions in transactions-logs
     if message.channel.name == TRANSACTION_LOG_CHANNEL and message.embeds:
+        await send_log_message(f"[DEBUG] Saw embed in transactions-logs from {message.author.name}")
         embed = message.embeds[0]
+        await send_log_message(f"[DEBUG] Author field: {embed.author.name if embed.author else 'None'}")
         
         if not embed.author or "Balance updated" not in str(embed.author.name):
+            await send_log_message(f"[DEBUG] Skipping: author check failed")
             await bot.process_commands(message)
             return
         
         if not embed.description:
+            await send_log_message(f"[DEBUG] Skipping: no description")
             await bot.process_commands(message)
             return
         
         description = embed.description
+        await send_log_message(f"[DEBUG] Description: {description[:200]}")
         
         if "add-money" not in description.lower():
+            await send_log_message(f"[DEBUG] Skipping: not add-money")
             await bot.process_commands(message)
             return
+        
+        await send_log_message(f"[DEBUG] Add-money detected!")
         
         # Parse line by line - grab everything after the colon
         lines = description.split('\n')
@@ -183,8 +191,10 @@ async def on_message(message):
             elif "Actioned by:" in line:
                 staff_name = line.split(":", 1)[1].strip().lstrip("@")
         
+        await send_log_message(f"[DEBUG] Receiver: {receiver_name}, Staff: {staff_name}")
+        
         if not receiver_name or not staff_name:
-            await send_log_message(f"[DEBUG] Parse failed. Receiver: {receiver_name}, Staff: {staff_name}")
+            await send_log_message(f"[DEBUG] Parse failed!")
             await bot.process_commands(message)
             return
         
@@ -214,6 +224,8 @@ async def on_message(message):
             bank_val = int(bank_match.group(1).replace(',', '').replace('+', ''))
             amount += abs(bank_val)
         
+        await send_log_message(f"[DEBUG] Amount: ${amount:,}")
+        
         if amount <= 0:
             await bot.process_commands(message)
             return
@@ -231,6 +243,7 @@ async def on_message(message):
             ping_content = f"⚠️ <@{OWNER_ID}> Large add-money detected!"
         
         await send_economy_log(content=ping_content, embed=log_embed)
+        await send_log_message(f"[DEBUG] Successfully logged to economy-cmd-logs!")
         return
 
     await bot.process_commands(message)
