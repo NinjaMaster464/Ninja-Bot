@@ -153,7 +153,6 @@ async def on_message(message):
     if not message.guild or message.author == bot.user:
         return
 
-    # Watch for UnbelievaBoat transactions in transactions-logs
     if message.channel.name == TRANSACTION_LOG_CHANNEL and message.embeds:
         embed = message.embeds[0]
         
@@ -171,19 +170,33 @@ async def on_message(message):
             await bot.process_commands(message)
             return
         
-        # Parse line by line
         lines = description.split('\n')
-        receiver_name = None
-        staff_name = None
         
-        for line in lines:
-            line = line.strip()
-            if "User:" in line:
-                receiver_name = line.split(":", 1)[1].strip().lstrip("@").strip()
-            elif "Actioned by:" in line:
-                staff_name = line.split(":", 1)[1].strip().lstrip("@").strip()
+        user_line = [l for l in lines if "User:" in l][0] if any("User:" in l for l in lines) else ""
+        staff_line = [l for l in lines if "Actioned by:" in l][0] if any("Actioned by:" in l for l in lines) else ""
+        amount_line = [l for l in lines if "Amount:" in l][0] if any("Amount:" in l for l in lines) else ""
         
-        if not receiver_name or not staff_name:
+        await send_log_message(f"[DEBUG] User line: {user_line}")
+        await send_log_message(f"[DEBUG] Staff line: {staff_line}")
+        await send_log_message(f"[DEBUG] Amount line: {amount_line}")
+        
+        receiver_name = user_line.split("@", 1)[1].strip() if "@" in user_line else "Unknown"
+        staff_name = staff_line.split("@", 1)[1].strip() if "@" in staff_line else "Unknown"
+        
+        # Parse amount - find all numbers with commas
+        nums = re.findall(r'[\d,]+', amount_line)
+        await send_log_message(f"[DEBUG] Numbers found: {nums}")
+        
+        amount = 0
+        for n in nums:
+            try:
+                amount += int(n.replace(',', ''))
+            except:
+                pass
+        
+        await send_log_message(f"[DEBUG] Final amount: {amount}")
+        
+        if amount <= 0:
             await bot.process_commands(message)
             return
         
@@ -200,31 +213,6 @@ async def on_message(message):
         staff_display = staff.name if staff else staff_name
         receiver_id = receiver.id if receiver else 0
         staff_id = staff.id if staff else 0
-        
-        # Calculate total amount - parse line by line for both Cash and Bank
-        amount = 0
-        
-        for line in lines:
-            if "Cash:" in line:
-                num_part = line.split("Cash:")[1].strip()
-                num_part = num_part.split("|")[0].strip()
-                num_part = num_part.lstrip("+").lstrip("-").strip()
-                try:
-                    amount += int(num_part.replace(',', ''))
-                except:
-                    pass
-            if "Bank:" in line:
-                num_part = line.split("Bank:")[1].strip()
-                num_part = num_part.split("|")[0].strip()
-                num_part = num_part.lstrip("+").lstrip("-").strip()
-                try:
-                    amount += int(num_part.replace(',', ''))
-                except:
-                    pass
-        
-        if amount <= 0:
-            await bot.process_commands(message)
-            return
         
         # Create embed for economy-cmd-logs
         log_embed = discord.Embed(
