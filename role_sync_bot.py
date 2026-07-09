@@ -171,37 +171,30 @@ async def on_message(message):
             await bot.process_commands(message)
             return
         
-        # Parse line by line
+        # Parse line by line - look for Discord mention IDs
         lines = description.split('\n')
-        receiver_name = None
-        staff_name = None
+        receiver_id = None
+        staff_id = None
         
         for line in lines:
-            line = line.strip()
-            if line.startswith("User:"):
-                receiver_name = line.replace("User: @", "").strip()
-            elif line.startswith("Actioned by:"):
-                staff_name = line.replace("Actioned by: @", "").strip()
+            mention_match = re.search(r'<@!?(\d+)>', line)
+            if mention_match:
+                uid = int(mention_match.group(1))
+                if "User:" in line:
+                    receiver_id = uid
+                elif "Actioned by:" in line:
+                    staff_id = uid
         
-        if not receiver_name or not staff_name:
+        if not receiver_id or not staff_id:
             await send_log_message(f"[DEBUG] Parse failed. Lines: {lines}")
-            await send_log_message(f"[DEBUG] Receiver: {receiver_name}, Staff: {staff_name}")
             await bot.process_commands(message)
             return
         
-        # Look up members by name
-        receiver = discord.utils.get(message.guild.members, name=receiver_name)
-        staff = discord.utils.get(message.guild.members, name=staff_name)
+        receiver = message.guild.get_member(receiver_id)
+        staff = message.guild.get_member(staff_id)
         
-        if not receiver:
-            receiver = discord.utils.get(message.guild.members, display_name=receiver_name)
-        if not staff:
-            staff = discord.utils.get(message.guild.members, display_name=staff_name)
-        
-        receiver_display = receiver.name if receiver else receiver_name
-        staff_display = staff.name if staff else staff_name
-        receiver_id = receiver.id if receiver else 0
-        staff_id = staff.id if staff else 0
+        receiver_display = receiver.name if receiver else f"Unknown ({receiver_id})"
+        staff_display = staff.name if staff else f"Unknown ({staff_id})"
         
         # Calculate total amount
         cash_match = re.search(r'Cash:\s*([+-]?[\d,]+)', description)
@@ -232,7 +225,6 @@ async def on_message(message):
             ping_content = f"⚠️ <@{OWNER_ID}> Large add-money detected!"
         
         await send_economy_log(content=ping_content, embed=log_embed)
-        await send_log_message(f"[DEBUG] Logged to economy-cmd-logs: {staff_display} -> {receiver_display} ${amount:,}")
         return
 
     await bot.process_commands(message)
