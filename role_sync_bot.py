@@ -171,26 +171,29 @@ async def on_message(message):
             await bot.process_commands(message)
             return
         
-        # Parse by username text (embed renders mentions as @username)
-        receiver_name_match = re.search(r'User:\s*@([^\n]+)', description)
-        staff_name_match = re.search(r'Actioned by:\s*@([^\n]+)', description)
-        cash_match = re.search(r'Cash:\s*([+-]?[\d,]+)', description)
-        bank_match = re.search(r'Bank:\s*([+-]?[\d,]+)', description)
+        # Parse line by line
+        lines = description.split('\n')
+        receiver_name = None
+        staff_name = None
         
-        if not receiver_name_match or not staff_name_match:
-            await send_log_message(f"[DEBUG] Could not parse names from description")
+        for line in lines:
+            line = line.strip()
+            if line.startswith("User: "):
+                receiver_name = line.replace("User: @", "").strip()
+            elif line.startswith("Actioned by: "):
+                staff_name = line.replace("Actioned by: @", "").strip()
+        
+        if not receiver_name or not staff_name:
+            await send_log_message(f"[DEBUG] Parse failed. Lines: {lines}")
+            await send_log_message(f"[DEBUG] Receiver: {receiver_name}, Staff: {staff_name}")
             await bot.process_commands(message)
             return
-        
-        receiver_name = receiver_name_match.group(1).strip()
-        staff_name = staff_name_match.group(1).strip()
         
         # Look up members by name
         receiver = discord.utils.get(message.guild.members, name=receiver_name)
         staff = discord.utils.get(message.guild.members, name=staff_name)
         
         if not receiver:
-            # Try display name
             receiver = discord.utils.get(message.guild.members, display_name=receiver_name)
         if not staff:
             staff = discord.utils.get(message.guild.members, display_name=staff_name)
@@ -201,6 +204,9 @@ async def on_message(message):
         staff_id = staff.id if staff else 0
         
         # Calculate total amount
+        cash_match = re.search(r'Cash:\s*([+-]?[\d,]+)', description)
+        bank_match = re.search(r'Bank:\s*([+-]?[\d,]+)', description)
+        
         amount = 0
         if cash_match:
             cash_val = int(cash_match.group(1).replace(',', '').replace('+', ''))
@@ -226,7 +232,7 @@ async def on_message(message):
             ping_content = f"⚠️ <@{OWNER_ID}> Large add-money detected!"
         
         await send_economy_log(content=ping_content, embed=log_embed)
-        await send_log_message(f"[DEBUG] Logged to economy-cmd-logs")
+        await send_log_message(f"[DEBUG] Logged to economy-cmd-logs: {staff_display} -> {receiver_display} ${amount:,}")
         return
 
     await bot.process_commands(message)
