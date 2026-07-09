@@ -176,16 +176,20 @@ async def on_message(message):
         staff_line = [l for l in lines if "Actioned by:" in l][0] if any("Actioned by:" in l for l in lines) else ""
         amount_line = [l for l in lines if "Amount:" in l][0] if any("Amount:" in l for l in lines) else ""
         
-        await send_log_message(f"[DEBUG] User line: {user_line}")
-        await send_log_message(f"[DEBUG] Staff line: {staff_line}")
-        await send_log_message(f"[DEBUG] Amount line: {amount_line}")
+        # Extract raw IDs from the lines
+        receiver_id = None
+        staff_id = None
         
-        receiver_name = user_line.split("@", 1)[1].strip() if "@" in user_line else "Unknown"
-        staff_name = staff_line.split("@", 1)[1].strip() if "@" in staff_line else "Unknown"
+        receiver_match = re.search(r'<@!?(\d+)>', user_line)
+        staff_match = re.search(r'<@!?(\d+)>', staff_line)
+        
+        if receiver_match:
+            receiver_id = int(receiver_match.group(1))
+        if staff_match:
+            staff_id = int(staff_match.group(1))
         
         # Parse amount - find all numbers with commas
         nums = re.findall(r'[\d,]+', amount_line)
-        await send_log_message(f"[DEBUG] Numbers found: {nums}")
         
         amount = 0
         for n in nums:
@@ -194,25 +198,12 @@ async def on_message(message):
             except:
                 pass
         
-        await send_log_message(f"[DEBUG] Final amount: {amount}")
-        
         if amount <= 0:
             await bot.process_commands(message)
             return
         
-        # Look up members by name
-        receiver = discord.utils.get(message.guild.members, name=receiver_name)
-        staff = discord.utils.get(message.guild.members, name=staff_name)
-        
-        if not receiver:
-            receiver = discord.utils.get(message.guild.members, display_name=receiver_name)
-        if not staff:
-            staff = discord.utils.get(message.guild.members, display_name=staff_name)
-        
-        receiver_display = receiver.name if receiver else receiver_name
-        staff_display = staff.name if staff else staff_name
-        receiver_id = receiver.id if receiver else 0
-        staff_id = staff.id if staff else 0
+        receiver_display = f"<@{receiver_id}>" if receiver_id else "Unknown"
+        staff_display = f"<@{staff_id}>" if staff_id else "Unknown"
         
         # Create embed for economy-cmd-logs
         log_embed = discord.Embed(
@@ -220,7 +211,6 @@ async def on_message(message):
             description=f"**Staff:** {staff_display}\n**Receiver:** {receiver_display}\n**Amount:** ${amount:,}",
             color=0x00ff00
         )
-        log_embed.set_footer(text=f"Receiver ID: {receiver_id} | Staff ID: {staff_id}")
         
         ping_content = None
         if amount >= LARGE_AMOUNT_THRESHOLD:
