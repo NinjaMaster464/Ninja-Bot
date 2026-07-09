@@ -33,8 +33,8 @@ LOG_CHANNEL_NAME = "gamble-god-logs"
 ECONOMY_LOG_CHANNEL_NAME = "economy-cmd-logs"
 TRANSACTION_LOG_CHANNEL = "transactions-logs"
 CASH_THRESHOLD = 10_000_000
-LARGE_AMOUNT_THRESHOLD = 50_000_000  # Amount that triggers a ping
-OWNER_ID = 660361662565580840  # Your user ID
+LARGE_AMOUNT_THRESHOLD = 50_000_000
+OWNER_ID = 660361662565580840
 
 CHECK_INTERVAL_MINUTES = 5
 # =========================
@@ -63,6 +63,15 @@ async def send_log_embed(title: str, description: str, color: int):
     if channel:
         embed = discord.Embed(title=title, description=description, color=color)
         await channel.send(embed=embed)
+
+
+async def send_log_message(content: str):
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return
+    channel = discord.utils.get(guild.text_channels, name=LOG_CHANNEL_NAME)
+    if channel:
+        await channel.send(content)
 
 
 async def send_economy_log(content: str = None, embed: discord.Embed = None):
@@ -144,40 +153,52 @@ async def on_message(message):
     if not message.guild or message.author == bot.user:
         return
 
-    # Watch for UnbelievaBoat add-money transactions in transactions-logs
+    # Watch for UnbelievaBoat transactions in transactions-logs
     if message.channel.name == TRANSACTION_LOG_CHANNEL and message.embeds:
         embed = message.embeds[0]
         
+        # Debug to gamble-god-logs
+        await send_log_message(f"[DEBUG] Saw embed in transactions-logs from {message.author.name}")
+        await send_log_message(f"[DEBUG] Author field: {embed.author.name if embed.author else 'None'}")
+        await send_log_message(f"[DEBUG] Has description: {embed.description is not None}")
+        
         if not embed.author or "Balance updated" not in str(embed.author.name):
+            await send_log_message(f"[DEBUG] Author not 'Balance updated', skipping")
             await bot.process_commands(message)
             return
         
         if not embed.description:
+            await send_log_message(f"[DEBUG] No description, skipping")
             await bot.process_commands(message)
             return
         
         description = embed.description
+        await send_log_message(f"[DEBUG] Description: {description[:200]}")
         
         if "add-money" not in description.lower():
+            await send_log_message(f"[DEBUG] Not add-money, skipping")
             await bot.process_commands(message)
             return
         
-        # Parse the embed description
-        # Format: User: @user\nActioned by: @staff\nAmount: Cash: +amount | Bank: amount\nReason: add-money command
+        await send_log_message(f"[DEBUG] Add-money detected! Parsing...")
         
+        # Parse the embed description
         receiver_match = re.search(r'User:\s*<@!?(\d+)>', description)
         staff_match = re.search(r'Actioned by:\s*<@!?(\d+)>', description)
         cash_match = re.search(r'Cash:\s*([+-]?[\d,]+)', description)
         bank_match = re.search(r'Bank:\s*([+-]?[\d,]+)', description)
         
+        await send_log_message(f"[DEBUG] Receiver match: {receiver_match.group(1) if receiver_match else 'None'}")
+        await send_log_message(f"[DEBUG] Staff match: {staff_match.group(1) if staff_match else 'None'}")
+        
         if not receiver_match or not staff_match:
+            await send_log_message(f"[DEBUG] Missing receiver or staff, skipping")
             await bot.process_commands(message)
             return
         
         receiver_id = int(receiver_match.group(1))
         staff_id = int(staff_match.group(1))
         
-        # Calculate total amount
         amount = 0
         if cash_match:
             cash_val = int(cash_match.group(1).replace(',', '').replace('+', ''))
@@ -186,7 +207,10 @@ async def on_message(message):
             bank_val = int(bank_match.group(1).replace(',', '').replace('+', ''))
             amount += abs(bank_val)
         
+        await send_log_message(f"[DEBUG] Amount: ${amount:,}")
+        
         if amount <= 0:
+            await send_log_message(f"[DEBUG] Amount is 0, skipping")
             await bot.process_commands(message)
             return
         
@@ -204,12 +228,12 @@ async def on_message(message):
         )
         log_embed.set_footer(text=f"Receiver ID: {receiver_id} | Staff ID: {staff_id}")
         
-        # Check if amount is over 50M
         ping_content = None
         if amount >= LARGE_AMOUNT_THRESHOLD:
             ping_content = f"⚠️ <@{OWNER_ID}> Large add-money detected!"
         
         await send_economy_log(content=ping_content, embed=log_embed)
+        await send_log_message(f"[DEBUG] Logged to economy-cmd-logs")
         return
 
     await bot.process_commands(message)
