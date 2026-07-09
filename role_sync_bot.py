@@ -153,36 +153,25 @@ async def on_message(message):
     if not message.guild or message.author == bot.user:
         return
 
-    # Log EVERY message in transactions-logs
-    if message.channel.name == TRANSACTION_LOG_CHANNEL:
-        await send_log_message(f"[DEBUG] Message in t-logs: author={message.author.name}, embeds={len(message.embeds)}")
-
     # Watch for UnbelievaBoat transactions in transactions-logs
     if message.channel.name == TRANSACTION_LOG_CHANNEL and message.embeds:
         embed = message.embeds[0]
-        await send_log_message(f"[DEBUG] Author field: {embed.author.name if embed.author else 'None'}")
         
         if not embed.author or "Balance updated" not in str(embed.author.name):
-            await send_log_message(f"[DEBUG] Skipping: author check failed")
             await bot.process_commands(message)
             return
         
         if not embed.description:
-            await send_log_message(f"[DEBUG] Skipping: no description")
             await bot.process_commands(message)
             return
         
         description = embed.description
-        await send_log_message(f"[DEBUG] Description: {description[:200]}")
         
         if "add-money" not in description.lower():
-            await send_log_message(f"[DEBUG] Skipping: not add-money")
             await bot.process_commands(message)
             return
         
-        await send_log_message(f"[DEBUG] Add-money detected!")
-        
-        # Parse line by line - grab everything after the colon
+        # Parse line by line
         lines = description.split('\n')
         receiver_name = None
         staff_name = None
@@ -194,10 +183,7 @@ async def on_message(message):
             elif "Actioned by:" in line:
                 staff_name = line.split(":", 1)[1].strip().lstrip("@").strip()
         
-        await send_log_message(f"[DEBUG] Receiver: {receiver_name}, Staff: {staff_name}")
-        
         if not receiver_name or not staff_name:
-            await send_log_message(f"[DEBUG] Parse failed!")
             await bot.process_commands(message)
             return
         
@@ -215,22 +201,28 @@ async def on_message(message):
         receiver_id = receiver.id if receiver else 0
         staff_id = staff.id if staff else 0
         
-        # Calculate total amount
+        # Calculate total amount - parse line by line for both Cash and Bank
         amount = 0
-        cash_match = re.search(r'Cash:\s*\+?([\d,]+)', description)
-        bank_match = re.search(r'Bank:\s*\+?([\d,]+)', description)
         
-        if cash_match:
-            cash_val = int(cash_match.group(1).replace(',', ''))
-            amount += cash_val
-        if bank_match:
-            bank_val = int(bank_match.group(1).replace(',', ''))
-            amount += bank_val
-        
-        await send_log_message(f"[DEBUG] Amount: ${amount:,}")
+        for line in lines:
+            if "Cash:" in line:
+                num_part = line.split("Cash:")[1].strip()
+                num_part = num_part.split("|")[0].strip()
+                num_part = num_part.lstrip("+").lstrip("-").strip()
+                try:
+                    amount += int(num_part.replace(',', ''))
+                except:
+                    pass
+            if "Bank:" in line:
+                num_part = line.split("Bank:")[1].strip()
+                num_part = num_part.split("|")[0].strip()
+                num_part = num_part.lstrip("+").lstrip("-").strip()
+                try:
+                    amount += int(num_part.replace(',', ''))
+                except:
+                    pass
         
         if amount <= 0:
-            await send_log_message(f"[DEBUG] Amount is 0, skipping")
             await bot.process_commands(message)
             return
         
@@ -247,7 +239,6 @@ async def on_message(message):
             ping_content = f"⚠️ <@{OWNER_ID}> Large add-money detected!"
         
         await send_economy_log(content=ping_content, embed=log_embed)
-        await send_log_message(f"[DEBUG] Successfully logged to economy-cmd-logs!")
         return
 
     await bot.process_commands(message)
