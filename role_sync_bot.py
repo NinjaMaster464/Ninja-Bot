@@ -178,9 +178,9 @@ async def on_message(message):
         
         for line in lines:
             line = line.strip()
-            if line.startswith("User: "):
+            if line.startswith("User:"):
                 receiver_name = line.replace("User: @", "").strip()
-            elif line.startswith("Actioned by: "):
+            elif line.startswith("Actioned by:"):
                 staff_name = line.replace("Actioned by: @", "").strip()
         
         if not receiver_name or not staff_name:
