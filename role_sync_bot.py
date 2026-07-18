@@ -119,24 +119,37 @@ async def update_role(session: aiohttp.ClientSession, member: discord.Member):
 
 @tasks.loop(minutes=CHECK_INTERVAL_MINUTES)
 async def sync_gamblers():
-    guild = bot.get_guild(GUILD_ID)
-    if not guild:
-        return
-    gambler_role = guild.get_role(GAMBLER_ROLE_ID)
-    if not gambler_role:
-        return
-    gamblers = [m for m in guild.members if gambler_role in m.roles and not m.bot]
-    await send_log_embed(title="🔄 Sync Started", description=f"Checking {len(gamblers)} gamblers...", color=0x3498db)
-    async with aiohttp.ClientSession() as session:
-        for i, member in enumerate(gamblers):
-            try:
-                await update_role(session, member)
-                await asyncio.sleep(2)
-                if (i + 1) % 25 == 0:
-                    print(f"Synced {i+1}/{len(gamblers)}...")
-            except Exception as e:
-                print(f"Failed {member.name}: {e}")
-    await send_log_embed(title="✅ Sync Complete", description=f"{len(gamblers)} gamblers checked.", color=0x00ff00)
+    try:
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            return
+        gambler_role = guild.get_role(GAMBLER_ROLE_ID)
+        if not gambler_role:
+            return
+        gamblers = [m for m in guild.members if gambler_role in m.roles and not m.bot]
+        await send_log_embed(title="🔄 Sync Started", description=f"Checking {len(gamblers)} gamblers...", color=0x3498db)
+        async with aiohttp.ClientSession() as session:
+            for i, member in enumerate(gamblers):
+                try:
+                    await update_role(session, member)
+                    await asyncio.sleep(5)
+                    if (i + 1) % 10 == 0:
+                        print(f"Synced {i+1}/{len(gamblers)}...")
+                except discord.HTTPException as e:
+                    if e.status == 429:
+                        retry_after = e.response.headers.get('Retry-After', 5)
+                        await send_log_message(f"⚠️ Discord rate limited. Waiting {retry_after}s...")
+                        await asyncio.sleep(float(retry_after))
+                    else:
+                        print(f"Failed {member.name}: {e}")
+                except Exception as e:
+                    print(f"Failed {member.name}: {e}")
+                    await asyncio.sleep(5)
+        await send_log_embed(title="✅ Sync Complete", description=f"{len(gamblers)} gamblers checked.", color=0x00ff00)
+    except Exception as e:
+        await send_log_message(f"⚠️ Sync loop crashed: {e}. Restarting in 60s...")
+        await asyncio.sleep(60)
+        sync_gamblers.restart()
 
 
 @bot.event
@@ -176,7 +189,6 @@ async def on_message(message):
         staff_line = [l for l in lines if "Actioned by:" in l][0] if any("Actioned by:" in l for l in lines) else ""
         amount_line = [l for l in lines if "Amount:" in l][0] if any("Amount:" in l for l in lines) else ""
         
-        # Extract raw IDs from the lines
         receiver_id = None
         staff_id = None
         
@@ -188,7 +200,6 @@ async def on_message(message):
         if staff_match:
             staff_id = int(staff_match.group(1))
         
-        # Parse amount - find all numbers with commas
         nums = re.findall(r'[\d,]+', amount_line)
         
         amount = 0
@@ -205,7 +216,6 @@ async def on_message(message):
         receiver_display = f"<@{receiver_id}>" if receiver_id else "Unknown"
         staff_display = f"<@{staff_id}>" if staff_id else "Unknown"
         
-        # Create embed for economy-cmd-logs
         log_embed = discord.Embed(
             title="💰 Add Money",
             description=f"**Staff:** {staff_display}\n**Receiver:** {receiver_display}\n**Amount:** ${amount:,}",
@@ -271,7 +281,7 @@ async def purge_gods(ctx):
                 await member.remove_roles(god_role)
                 removed += 1
                 await send_log_embed(title="🧹 Gamble God Purged", description=f"**{member.name}** lost Gamble God.\nBalance: ${balance:,}", color=0xff0000)
-            await asyncio.sleep(2)
+            await asyncio.sleep(5)
     await ctx.send(f"✅ Purge complete! Removed Gamble God from {removed} users.")
 
 
