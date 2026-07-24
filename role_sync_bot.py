@@ -232,6 +232,54 @@ async def on_message(message):
     await bot.process_commands(message)
 
 
+# ===== NEW: Temporary Access Role System for 1M Coin Claim =====
+# This grants a temporary role when a user gets the "1M Gambling Coin" role
+# and removes it after 60 seconds to prevent refund exploitation
+
+TEMP_ACCESS_ROLE_ID = 1530185119699308746  # New restriction role for claiming
+TARGET_REWARD_ROLE_ID = 1516138694258720778  # 1M Gambling Coin role
+
+@bot.event
+async def on_member_update(before, after):
+    # Check if the target role was ADDED to the member
+    if TARGET_REWARD_ROLE_ID not in [r.id for r in before.roles] and TARGET_REWARD_ROLE_ID in [r.id for r in after.roles]:
+        # User just got the 1M Gambling Coin reward role!
+        temp_role = after.guild.get_role(TEMP_ACCESS_ROLE_ID)
+        if temp_role:
+            try:
+                await after.add_roles(temp_role, reason="Temporary access for 1M coin claim")
+                print(f"✅ Added temp access role to {after.name} (ID: {after.id})")
+                
+                # Send log to gamble-god-logs channel
+                await send_log_embed(
+                    title="🎯 1M Coin Claim Access Granted",
+                    description=f"**User:** {after.mention}\n**Action:** Granted temporary access role\n**Expires:** In 60 seconds",
+                    color=0x00ff00
+                )
+                
+                # Wait 60 seconds, then remove it
+                await asyncio.sleep(60)
+                
+                # Check if they still have the role (they might have lost it already)
+                if temp_role in after.roles:
+                    await after.remove_roles(temp_role, reason="Temp access expired after 60s")
+                    print(f"⏰ Removed temp access role from {after.name}")
+                    
+                    # Send log to gamble-god-logs channel
+                    await send_log_embed(
+                        title="⏰ 1M Coin Claim Access Expired",
+                        description=f"**User:** {after.mention}\n**Action:** Temporary access role removed\n**Reason:** 60-second timer expired",
+                        color=0xffa500
+                    )
+            except discord.HTTPException as e:
+                print(f"❌ Failed to manage temp role for {after.name}: {e}")
+                await send_log_message(f"❌ Failed to manage temp role for {after.mention}: {e}")
+            except Exception as e:
+                print(f"❌ Unexpected error: {e}")
+                await send_log_message(f"❌ Unexpected error for {after.mention}: {e}")
+# =================================================================
+
+
 @bot.command(name="check")
 async def check_balance(ctx):
     async with aiohttp.ClientSession() as session:
