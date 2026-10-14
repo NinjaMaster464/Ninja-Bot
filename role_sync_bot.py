@@ -3,6 +3,8 @@ from discord.ext import commands, tasks
 import aiohttp
 import asyncio
 import re
+import json
+import os
 from flask import Flask
 from threading import Thread
 
@@ -18,8 +20,6 @@ def run_http():
 Thread(target=run_http).start()
 
 # ===== CONFIGURATION =====
-import os
-
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 UNB_TOKEN = os.getenv("UNB_TOKEN")
 GUILD_ID = 1516138323666669818
@@ -28,21 +28,45 @@ GUILD_ID = 1516138323666669818
 ROLE_ID = 1517362960895311902  # Gamble God
 GAMBLER_ROLE_ID = 1516138637409124363  # The Gambler
 ECONOMY_MANAGER_ROLE_ID = 1527862603316068402  # Economy Manager
+ECONOMY_ASSISTANT_ROLE_ID = 1559597519112118413  # Economy Assistant
 
-LOG_CHANNEL_NAME = "《💰》gamble-god-logs"
-ECONOMY_LOG_CHANNEL_NAME = "《💰》economy-cmd-logs"
-TRANSACTION_LOG_CHANNEL = "economy-logs"
+LOG_CHANNEL_NAME = "gamble-god-logs"
+ECONOMY_LOG_CHANNEL_NAME = "economy-logs"
+TRANSACTION_LOG_CHANNEL = "transactions-logs"
 CASH_THRESHOLD = 10_000_000
 LARGE_AMOUNT_THRESHOLD = 50_000_000
 OWNER_ID = 660361662565580840
 
 CHECK_INTERVAL_MINUTES = 5
+
+# Temp role system
+TEMP_ACCESS_ROLE_ID = 1530185119699308746
+TARGET_REWARD_ROLE_ID = 1516138694258720778
+
+# Staff blacklist file
+BLACKLIST_FILE = "staff_blacklist.json"
 # =========================
 
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+# ===== STAFF BLACKLIST FUNCTIONS =====
+
+def load_blacklist():
+    try:
+        with open(BLACKLIST_FILE, 'r') as f:
+            return set(json.load(f))
+    except:
+        return set()
+
+def save_blacklist(blacklist):
+    with open(BLACKLIST_FILE, 'w') as f:
+        json.dump(list(blacklist), f)
+
+staff_blacklist = load_blacklist()
 
 
 @bot.event
@@ -115,6 +139,49 @@ async def update_role(session: aiohttp.ClientSession, member: discord.Member):
         await member.remove_roles(role)
         await send_log_embed(title="🔴 Gamble God Removed", description=f"**{member.name}** lost Gamble God.\nBalance: ${balance:,}", color=0xff0000)
     return balance
+
+
+async def reverse_add_money(session: aiohttp.ClientSession, receiver_id: int, amount: int):
+    """Reverse an add-money by subtracting the exact amount added."""
+    url_get = f"https://unbelievaboat.com/api/v1/guilds/{GUILD_ID}/users/{receiver_id}"
+    headers = {"Authorization": UNB_TOKEN, "Accept": "application/json", "Content-Type": "application/json"}
+    
+    try:
+        async with session.get(url_get, headers=headers) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                cash = data.get("cash", 0)
+                bank = data.get("bank", 0)
+            else:
+                return False
+        
+        remaining = amount
+        if cash >= remaining:
+            cash -= remaining
+            remaining = 0
+        else:
+            remaining -= cash
+            cash = 0
+            if bank >= remaining:
+                bank -= remaining
+            else:
+                bank = 0
+        
+        async with session.put(url_get, headers=headers, json={"cash": cash, "bank": bank}) as resp:
+            return resp.status == 200
+    except:
+        return False
+
+
+async def dm_owner(title: str, description: str, color: int):
+    """Send a DM to the bot owner."""
+    try:
+        owner = bot.get_user(OWNER_ID)
+        if owner:
+            embed = discord.Embed(title=title, description=description, color=color)
+            await owner.send(embed=embed)
+    except:
+        pass
 
 
 @tasks.loop(minutes=CHECK_INTERVAL_MINUTES)
@@ -216,6 +283,27 @@ async def on_message(message):
         receiver_display = f"<@{receiver_id}>" if receiver_id else "Unknown"
         staff_display = f"<@{staff_id}>" if staff_id else "Unknown"
         
+        # Check if staff is blacklisted
+        if staff_id and str(staff_id) in staff_blacklist:
+            async with aiohttp.ClientSession() as session:
+                reversed_success = await reverse_add_money(session, receiver_id, amount)
+            
+            status = "✅ Reversed!" if reversed_success else "❌ Reversal failed!"
+            
+            block_embed = discord.Embed(
+                title="🚫 Add Money Blocked",
+                description=f"**Staff:** {staff_display} (BLACKLISTED)\n**Receiver:** {receiver_display}\n**Amount:** ${amount:,}\n**Status:** {status}",
+                color=0xff0000
+            )
+            await send_economy_log(embed=block_embed)
+            await dm_owner(
+                title="🚫 Add Money Blocked - Blacklisted Staff",
+                description=f"**Staff:** {staff_display}\n**Receiver:** {receiver_display}\n**Amount:** ${amount:,}\n**Status:** {status}",
+                color=0xff0000
+            )
+            return
+        
+        # Normal add-money logging
         log_embed = discord.Embed(
             title="💰 Add Money",
             description=f"**Staff:** {staff_display}\n**Receiver:** {receiver_display}\n**Amount:** ${amount:,}",
@@ -227,58 +315,47 @@ async def on_message(message):
             ping_content = f"⚠️ <@{OWNER_ID}> Large add-money detected!"
         
         await send_economy_log(content=ping_content, embed=log_embed)
+        await dm_owner(
+            title="💰 Add Money Detected",
+            description=f"**Staff:** {staff_display}\n**Receiver:** {receiver_display}\n**Amount:** ${amount:,}",
+            color=0x00ff00
+        )
         return
 
     await bot.process_commands(message)
 
 
-# ===== NEW: Temporary Access Role System for 1M Coin Claim =====
-# This grants a temporary role when a user gets the "1M Gambling Coin" role
-# and removes it after 60 seconds to prevent refund exploitation
-
-TEMP_ACCESS_ROLE_ID = 1530185119699308746  # New restriction role for claiming
-TARGET_REWARD_ROLE_ID = 1516138694258720778  # 1M Gambling Coin role
+# ===== TEMP ROLE SYSTEM =====
 
 @bot.event
 async def on_member_update(before, after):
-    # Check if the target role was ADDED to the member
     if TARGET_REWARD_ROLE_ID not in [r.id for r in before.roles] and TARGET_REWARD_ROLE_ID in [r.id for r in after.roles]:
-        # User just got the 1M Gambling Coin reward role!
         temp_role = after.guild.get_role(TEMP_ACCESS_ROLE_ID)
         if temp_role:
             try:
                 await after.add_roles(temp_role, reason="Temporary access for 1M coin claim")
-                print(f"✅ Added temp access role to {after.name} (ID: {after.id})")
-                
-                # Send log to gamble-god-logs channel
+                print(f"✅ Added temp access role to {after.name}")
                 await send_log_embed(
                     title="🎯 1M Coin Claim Access Granted",
-                    description=f"**User:** {after.mention}\n**Action:** Granted temporary access role\n**Expires:** In 60 seconds",
+                    description=f"**User:** {after.mention}\n**Expires:** In 60 seconds",
                     color=0x00ff00
                 )
-                
-                # Wait 60 seconds, then remove it
                 await asyncio.sleep(60)
-                
-                # Check if they still have the role (they might have lost it already)
                 if temp_role in after.roles:
                     await after.remove_roles(temp_role, reason="Temp access expired after 60s")
                     print(f"⏰ Removed temp access role from {after.name}")
-                    
-                    # Send log to gamble-god-logs channel
                     await send_log_embed(
                         title="⏰ 1M Coin Claim Access Expired",
-                        description=f"**User:** {after.mention}\n**Action:** Temporary access role removed\n**Reason:** 60-second timer expired",
+                        description=f"**User:** {after.mention}\n**Reason:** 60-second timer expired",
                         color=0xffa500
                     )
             except discord.HTTPException as e:
                 print(f"❌ Failed to manage temp role for {after.name}: {e}")
-                await send_log_message(f"❌ Failed to manage temp role for {after.mention}: {e}")
             except Exception as e:
                 print(f"❌ Unexpected error: {e}")
-                await send_log_message(f"❌ Unexpected error for {after.mention}: {e}")
-# =================================================================
 
+
+# ===== COMMANDS =====
 
 @bot.command(name="check")
 async def check_balance(ctx):
@@ -296,7 +373,7 @@ async def check_balance(ctx):
 
 
 @bot.command(name="forcecheck")
-@commands.has_role(ECONOMY_MANAGER_ROLE_ID)
+@commands.has_any_role(ECONOMY_MANAGER_ROLE_ID, ECONOMY_ASSISTANT_ROLE_ID)
 async def force_check(ctx, member: discord.Member):
     async with aiohttp.ClientSession() as session:
         balance = await update_role(session, member)
@@ -312,7 +389,7 @@ async def sync_all(ctx):
 
 
 @bot.command(name="purgegods")
-@commands.has_role(ECONOMY_MANAGER_ROLE_ID)
+@commands.has_any_role(ECONOMY_MANAGER_ROLE_ID, ECONOMY_ASSISTANT_ROLE_ID)
 async def purge_gods(ctx):
     guild = ctx.guild
     god_role = guild.get_role(ROLE_ID)
@@ -331,6 +408,135 @@ async def purge_gods(ctx):
                 await send_log_embed(title="🧹 Gamble God Purged", description=f"**{member.name}** lost Gamble God.\nBalance: ${balance:,}", color=0xff0000)
             await asyncio.sleep(5)
     await ctx.send(f"✅ Purge complete! Removed Gamble God from {removed} users.")
+
+
+@bot.command(name="staffblacklist")
+@commands.has_role(ECONOMY_MANAGER_ROLE_ID)
+async def staff_blacklist_cmd(ctx, member: discord.Member):
+    staff_blacklist.add(str(member.id))
+    save_blacklist(staff_blacklist)
+    await ctx.send(f"🔒 **{member.name}** added to staff blacklist.")
+    await send_log_message(f"🔒 **{ctx.author.name}** blacklisted staff **{member.name}**")
+
+
+@bot.command(name="staffunblacklist")
+@commands.has_role(ECONOMY_MANAGER_ROLE_ID)
+async def staff_unblacklist_cmd(ctx, member: discord.Member):
+    staff_blacklist.discard(str(member.id))
+    save_blacklist(staff_blacklist)
+    await ctx.send(f"🔓 **{member.name}** removed from staff blacklist.")
+    await send_log_message(f"🔓 **{ctx.author.name}** unblacklisted staff **{member.name}**")
+
+
+@bot.command(name="staffblacklisted")
+@commands.has_role(ECONOMY_MANAGER_ROLE_ID)
+async def staff_blacklisted_cmd(ctx):
+    if not staff_blacklist:
+        await ctx.send("No staff members are currently blacklisted.")
+        return
+    members = []
+    for uid in staff_blacklist:
+        member = ctx.guild.get_member(int(uid))
+        if member:
+            members.append(f"• {member.mention} ({member.name})")
+        else:
+            members.append(f"• Unknown ({uid})")
+    embed = discord.Embed(title="🔒 Blacklisted Staff", description="\n".join(members), color=0xff0000)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="restock")
+@commands.has_any_role(ECONOMY_MANAGER_ROLE_ID, ECONOMY_ASSISTANT_ROLE_ID)
+async def restock_cmd(ctx, *, args: str = None):
+    """Manually restock a store item. Usage: !restock <item name> <amount>"""
+    
+    if not args:
+        await ctx.send("❌ Usage: `!restock <item name> <amount>`\nExample: `!restock Mystery Box 50`")
+        return
+    
+    parts = args.rsplit(" ", 1)
+    if len(parts) != 2 or not parts[1].isdigit():
+        await ctx.send("❌ Invalid format. Usage: `!restock <item name> <amount>`")
+        return
+    
+    item_name = parts[0].strip()
+    amount = int(parts[1])
+    
+    url = f"https://unbelievaboat.com/api/v1/guilds/{GUILD_ID}/items"
+    headers = {"Authorization": UNB_TOKEN, "Accept": "application/json", "Content-Type": "application/json"}
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            if resp.status != 200:
+                await ctx.send(f"❌ Failed to fetch store items. Status: {resp.status}")
+                return
+            data = await resp.json()
+            items = data.get("items", [])
+        
+        if not items:
+            await ctx.send("❌ No items found in the store.")
+            return
+        
+        matched = None
+        for item in items:
+            if item.get("name", "").lower() == item_name.lower():
+                matched = item
+                break
+        
+        if not matched:
+            for item in items:
+                if item_name.lower() in item.get("name", "").lower():
+                    matched = item
+                    break
+        
+        if not matched:
+            await ctx.send(f"❌ No item found matching `{item_name}`.")
+            return
+        
+        item_id = matched.get("id")
+        update_url = f"https://unbelievaboat.com/api/v1/guilds/{GUILD_ID}/items/{item_id}"
+        
+        async with session.put(update_url, headers=headers, json={"stock_remaining": amount}) as update_resp:
+            if update_resp.status == 200:
+                await ctx.send(f"✅ Restocked **{matched.get('name')}** to **{amount}**.")
+                await send_log_message(f"📦 **{ctx.author.name}** restocked **{matched.get('name')}** to {amount}")
+            else:
+                await ctx.send(f"❌ Failed to restock. Status: {update_resp.status}")
+
+
+@bot.command(name="stock")
+@commands.has_any_role(ECONOMY_MANAGER_ROLE_ID, ECONOMY_ASSISTANT_ROLE_ID)
+async def stock_cmd(ctx):
+    """View all store items and their current stock."""
+    url = f"https://unbelievaboat.com/api/v1/guilds/{GUILD_ID}/items"
+    headers = {"Authorization": UNB_TOKEN, "Accept": "application/json"}
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            if resp.status != 200:
+                await ctx.send("❌ Failed to fetch store items.")
+                return
+            data = await resp.json()
+            items = data.get("items", [])
+    
+    if not items:
+        await ctx.send("No items in the store.")
+        return
+    
+    lines = []
+    for item in items:
+        if item.get("unlimited_stock"):
+            stock_display = "∞"
+        else:
+            stock_display = str(item.get("stock_remaining", 0))
+        lines.append(f"• **{item.get('name')}** — {stock_display}")
+    
+    embed = discord.Embed(
+        title="📦 Store Stock",
+        description="\n".join(lines),
+        color=0x3498db
+    )
+    await ctx.send(embed=embed)
 
 
 bot.run(DISCORD_TOKEN)
