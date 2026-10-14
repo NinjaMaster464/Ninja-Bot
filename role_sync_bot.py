@@ -494,14 +494,23 @@ async def restock_cmd(ctx, *, args: str = None):
             return
         
         item_id = matched.get("id")
+        await ctx.send(f"[DEBUG] Item: `{matched.get('name')}` | ID: `{item_id}` | Keys: `{list(matched.keys())}`")
+        
         update_url = f"https://unbelievaboat.com/api/v1/guilds/{GUILD_ID}/items/{item_id}"
         
         async with session.put(update_url, headers=headers, json={"stock_remaining": amount}) as update_resp:
             if update_resp.status == 200:
                 await ctx.send(f"✅ Restocked **{matched.get('name')}** to **{amount}**.")
-                await send_log_message(f"📦 **{ctx.author.name}** restocked **{matched.get('name')}** to {amount}")
+                await send_economy_log(
+                    embed=discord.Embed(
+                        title="📦 Store Restocked",
+                        description=f"**Staff:** {ctx.author.mention}\n**Item:** {matched.get('name')}\n**New Stock:** {amount}",
+                        color=0x00ff00
+                    )
+                )
             else:
-                await ctx.send(f"❌ Failed to restock. Status: {update_resp.status}")
+                error_text = await update_resp.text()
+                await ctx.send(f"❌ Failed to restock. Status: {update_resp.status}\n`{error_text[:200]}`")
 
 
 @bot.command(name="stock")
